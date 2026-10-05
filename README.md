@@ -80,7 +80,7 @@ sologsb101-1007/
 
 - **IndexedDB 库名**：`gbtaildam`（Dexie 封装，`src/utils/db.ts`）
 - **对象表**：`dams`、`sections`、`points`、`observations`、`alarms`、`pools`
-- **数据结构版本**：`DB_VERSION = 2`，含 `version(1)` → `version(2)` 的索引变更与 `upgrade()` 迁移（补齐 `revision`、用所属断面回填测点 `damId`、用测点回填预警 `damId` 并补齐处置字段）
+- **数据结构版本**：`DB_VERSION = 3`，含 `version(1)` → `version(2)` → `version(3)` 的索引变更与 `upgrade()` 迁移（补齐 `revision`、回填测点/预警 `damId`、补齐处置字段；v3 为观测增加修正/作废留痕字段、为预警增加「已撤销」状态）
 - **首屏自动播种**：`initDatabase()` 中 `if (await db.dams.count() === 0) await seedDatabase()`，播种 2 座坝体 → 4 个断面 → 9 个测点 → 21 条观测 → 6 张预警 → 5 条库水位记录的完整父子孙链条；播种幂等
 - **localStorage 辅助键**：`gbtaildam:db-version`、`gbtaildam:last-backup-at`、`gbtaildam:ui-prefs`
 - 应用为**无状态容器**：数据不落容器磁盘、不使用数据库服务、不挂载命名卷
@@ -99,4 +99,5 @@ npm run preview    # 本地预览构建产物
 
 - 累计变化量 `= 读数 − 初值`；日速率 `= |本次读数 − 上次读数| ÷ 间隔天数`
 - 比值 `= |累计变化量| ÷ 阈值`；分级：`≥0.70` 蓝、`≥0.85` 黄、`≥1.00` 橙、`≥1.30` 红
+- 观测编辑/作废必须填写原因，系统保留修改前后读数与历史，按日期顺序重算该测点；未闭环预警以最新有效观测同步级别和触发值，不再越限则撤销，已闭环预警保持不变；作废记录不参与计算
 - 干滩长度达标下限 `100 m`，安全超高达标下限 `1.5 m`

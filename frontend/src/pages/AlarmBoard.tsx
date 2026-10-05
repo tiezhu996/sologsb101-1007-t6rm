@@ -70,7 +70,7 @@ export default function AlarmBoard() {
     if (damId && alarm.damId !== damId) return false
     if (levels.length > 0 && !levels.includes(alarm.level)) return false
     if (alarmStore.stateFilter.length > 0 && !alarmStore.stateFilter.includes(alarm.state)) return false
-    if (alarmStore.onlyOpen && alarm.state === '已闭环') return false
+    if (alarmStore.onlyOpen && alarm.state !== '待处置' && alarm.state !== '处置中') return false
     const text = keyword.trim().toLowerCase()
     if (text.length === 0) return true
     const point = pointStore.points.find((item) => item.id === alarm.pointId)
@@ -181,7 +181,7 @@ export default function AlarmBoard() {
       width: 130,
       render: (_value, record) => {
         const observation = observationTable.rows.find(
-          (row) => row.pointId === record.pointId && row.date === record.triggerDate
+          (row) => row.pointId === record.pointId && row.date === record.triggerDate && row.status !== '已作废'
         )
         return observation ? observation.reading.toFixed(3) : <span className="muted">—</span>
       }
@@ -190,7 +190,7 @@ export default function AlarmBoard() {
       title: '状态',
       width: 110,
       render: (_value, record) => (
-        <Tag color={record.state === '已闭环' ? 'green' : record.state === '处置中' ? 'blue' : 'orange'}>
+        <Tag color={record.state === '已闭环' ? 'green' : record.state === '处置中' ? 'blue' : record.state === '已撤销' ? 'default' : 'orange'}>
           {record.state}
         </Tag>
       )
@@ -198,14 +198,25 @@ export default function AlarmBoard() {
     { title: '处置人', dataIndex: 'handler', width: 100, render: (value: string) => value || '—' },
     { title: '处置措施', dataIndex: 'measure', width: 220, render: (value: string) => value || '—' },
     {
+      title: '同步说明',
+      dataIndex: 'syncReason',
+      width: 220,
+      render: (value: string) => (value ? <span>{value}</span> : <span className="muted">—</span>)
+    },
+    {
       title: '操作',
       width: 220,
       render: (_value, record) => (
         <Space size={4}>
-          <Button type="link" size="small" disabled={!ALARM_STATE_FLOW[record.state]} onClick={() => advance(record)}>
+          <Button
+            type="link"
+            size="small"
+            disabled={!ALARM_STATE_FLOW[record.state] || record.state === '已撤销'}
+            onClick={() => advance(record)}
+          >
             {ALARM_STATE_FLOW[record.state] === '处置中' ? '开始处置' : ALARM_STATE_FLOW[record.state] === '已闭环' ? '闭环' : '已闭环'}
           </Button>
-          <Button type="link" size="small" onClick={() => openEdit(record)}>
+          <Button type="link" size="small" disabled={record.state === '已撤销'} onClick={() => openEdit(record)}>
             编辑
           </Button>
           <Popconfirm title="确认删除该预警单？" onConfirm={() => remove(record)}>
@@ -268,7 +279,7 @@ export default function AlarmBoard() {
             compact
           />
         ) : (
-          <Table<Alarm> rowKey="id" size="small" bordered dataSource={rows} columns={columns} pagination={false} scroll={{ x: 1400 }} />
+          <Table<Alarm> rowKey="id" size="small" bordered dataSource={rows} columns={columns} pagination={false} scroll={{ x: 1620 }} />
         )}
       </div>
 

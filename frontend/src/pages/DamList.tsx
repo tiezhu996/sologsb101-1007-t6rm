@@ -59,7 +59,7 @@ export default function DamList() {
 
   const pointCountOf = (damId: string): number => pointStore.points.filter((point) => point.damId === damId).length
   const openAlarmCountOf = (damId: string): number =>
-    alarmStore.alarms.filter((alarm) => alarm.damId === damId && alarm.state !== '已闭环').length
+    alarmStore.alarms.filter((alarm) => alarm.damId === damId && (alarm.state === '待处置' || alarm.state === '处置中')).length
 
   const openCreateDam = (): void => {
     setEditingDamId(null)

@@ -80,6 +80,11 @@ export default function TrendBoard() {
     })
   }
 
+  const activeObservationRows = useMemo(
+    () => observationTable.rows.filter((row) => row.status !== '已作废'),
+    [observationTable.rows]
+  )
+
   const trendRows = useMemo<TrendRow[]>(() => {
     const rows = pointStore.points
       .filter((point) => {
@@ -90,7 +95,7 @@ export default function TrendBoard() {
         return true
       })
       .map((point) => {
-        const own = observationTable.rows
+        const own = activeObservationRows
           .filter((row) => row.pointId === point.id)
           .sort((a, b) => a.date.localeCompare(b.date))
         const latest = own[own.length - 1] ?? null
@@ -110,7 +115,7 @@ export default function TrendBoard() {
       })
     const filtered = onlyExceeded ? rows.filter((row) => row.ratio >= 0.7) : rows
     return filtered.sort((a, b) => b.ratio - a.ratio)
-  }, [pointStore.points, observationTable.rows, damStore.sections, damStore.dams, filter, onlyExceeded])
+  }, [pointStore.points, activeObservationRows, damStore.sections, damStore.dams, filter, onlyExceeded])
 
   const exceededCount = trendRows.filter((row) => row.ratio >= 0.7).length
   const averageRate = useMemo(() => {
@@ -127,7 +132,7 @@ export default function TrendBoard() {
         .sort((a, b) => b.date.localeCompare(a.date)),
     [observationTable.rows, drawerPointId]
   )
-  const drawerLatest = drawerObservations[0] ?? null
+  const drawerLatest = drawerObservations.find((row) => row.status !== '已作废') ?? null
   const drawerLevel = drawerPoint && drawerLatest ? alarmLevel.evaluate(drawerPoint, drawerLatest.reading).level : null
 
   const generateAlarm = async (point: Point, observation: ObservationRow): Promise<void> => {
@@ -311,7 +316,7 @@ export default function TrendBoard() {
               <Descriptions.Item label="单位">{drawerPoint.unit}</Descriptions.Item>
               <Descriptions.Item label="初值">{drawerPoint.initialValue}</Descriptions.Item>
               <Descriptions.Item label="阈值">{drawerPoint.threshold}</Descriptions.Item>
-              <Descriptions.Item label="观测次数">{drawerObservations.length}</Descriptions.Item>
+              <Descriptions.Item label="有效观测次数">{drawerObservations.filter((row) => row.status !== '已作废').length}</Descriptions.Item>
               <Descriptions.Item label="最新判定">
                 {drawerLevel ? <AlarmTag level={drawerLevel} size="small" /> : <Tag color="green">正常</Tag>}
               </Descriptions.Item>
@@ -346,11 +351,50 @@ export default function TrendBoard() {
                 pagination={false}
                 dataSource={drawerObservations}
                 columns={[
-                  { title: '日期', dataIndex: 'date', width: 120 },
-                  { title: '读数', dataIndex: 'reading', width: 110, render: (value: number) => value.toFixed(3) },
-                  { title: '累计变化', dataIndex: 'cumulative', width: 120, render: (value: number) => value.toFixed(3) },
-                  { title: '日速率', dataIndex: 'dailyRate', width: 110, render: (value: number) => value.toFixed(4) },
-                  { title: '观测人', dataIndex: 'observer', width: 100 }
+                  { title: '日期', dataIndex: 'date', width: 110 },
+                  {
+                    title: '状态',
+                    dataIndex: 'status',
+                    width: 80,
+                    render: (value: ObservationRow['status']) => (
+                      <Tag color={value === '已作废' ? 'red' : 'green'}>{value}</Tag>
+                    )
+                  },
+                  {
+                    title: '读数',
+                    dataIndex: 'reading',
+                    width: 100,
+                    render: (value: number, record) =>
+                      record.status === '已作废' ? <span className="muted">{value.toFixed(3)}</span> : value.toFixed(3)
+                  },
+                  {
+                    title: '累计变化',
+                    dataIndex: 'cumulative',
+                    width: 110,
+                    render: (value: number, record) => (record.status === '已作废' ? <span className="muted">—</span> : value.toFixed(3))
+                  },
+                  {
+                    title: '日速率',
+                    dataIndex: 'dailyRate',
+                    width: 100,
+                    render: (value: number, record) => (record.status === '已作废' ? <span className="muted">—</span> : value.toFixed(4))
+                  },
+                  { title: '观测人', dataIndex: 'observer', width: 90 },
+                  {
+                    title: '修正原因 / 前后读数',
+                    render: (_value: unknown, record: ObservationRow) =>
+                      record.correctionReason ? (
+                        <div>
+                          <div>{record.correctionReason}</div>
+                          <div className="muted">
+                            {record.readingBeforeCorrection?.toFixed(3) ?? '—'} →{' '}
+                            {record.readingAfterCorrection?.toFixed(3) ?? '—'}
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="muted">—</span>
+                      )
+                  }
                 ]}
               />
             )}

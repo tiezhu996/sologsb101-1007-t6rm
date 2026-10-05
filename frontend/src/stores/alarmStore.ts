@@ -61,6 +61,7 @@ export const useAlarmStore = create<AlarmState_>((set, get) => ({
       state: draft.state,
       handler: draft.handler.trim(),
       measure: draft.measure.trim(),
+      syncReason: draft.syncReason?.trim() ?? '',
       createdAt: now,
       updatedAt: now
     }
@@ -72,6 +73,7 @@ export const useAlarmStore = create<AlarmState_>((set, get) => ({
     const next: Partial<AlarmRow> = { ...patch, updatedAt: Date.now() }
     if (patch.handler !== undefined) next.handler = patch.handler.trim()
     if (patch.measure !== undefined) next.measure = patch.measure.trim()
+    if (patch.syncReason !== undefined) next.syncReason = patch.syncReason.trim()
     await db.alarms.update(id, next)
   },
 
@@ -98,7 +100,7 @@ export const useAlarmStore = create<AlarmState_>((set, get) => ({
   },
 
   counts() {
-    const counts: Record<AlarmState, number> = { 待处置: 0, 处置中: 0, 已闭环: 0 }
+    const counts: Record<AlarmState, number> = { 待处置: 0, 处置中: 0, 已闭环: 0, 已撤销: 0 }
     get().alarms.forEach((alarm) => {
       counts[alarm.state] += 1
     })
@@ -115,9 +117,10 @@ export const useAlarmStore = create<AlarmState_>((set, get) => ({
 
   closedPercent() {
     const { alarms } = get()
-    if (alarms.length === 0) return 0
-    const closed = alarms.filter((alarm) => alarm.state === '已闭环').length
-    return Math.round((closed / alarms.length) * 100)
+    const effective = alarms.filter((alarm) => alarm.state !== '已撤销')
+    if (effective.length === 0) return 0
+    const closed = effective.filter((alarm) => alarm.state === '已闭环').length
+    return Math.round((closed / effective.length) * 100)
   },
 
   sortedAlarms() {

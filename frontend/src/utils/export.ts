@@ -61,10 +61,21 @@ export function exportObservationCsv(
     '累计变化',
     '日速率',
     '占阈值比(%)',
-    '观测人'
+    '观测人',
+    '状态',
+    '最近修正类型',
+    '修正原因',
+    '修改前读数',
+    '修改后读数',
+    '修正时间'
   ]
   const lines: string[] = [header.map(csvCell).join(',')]
-  observations.forEach((observation) => {
+  ;[...observations]
+    .sort((a, b) => {
+      const pointDiff = a.pointId.localeCompare(b.pointId)
+      return pointDiff !== 0 ? pointDiff : a.date.localeCompare(b.date)
+    })
+    .forEach((observation) => {
     const point = points.find((item) => item.id === observation.pointId)
     const section = point ? sections.find((item) => item.id === point.sectionId) : undefined
     const dam = section ? dams.find((item) => item.id === section.damId) : undefined
@@ -83,8 +94,14 @@ export function exportObservationCsv(
         observation.reading,
         observation.cumulative,
         observation.dailyRate,
-        point ? (ratioOf(observation.cumulative, point.threshold) * 100).toFixed(1) : '—',
-        observation.observer
+        point && observation.status !== '已作废' ? (ratioOf(observation.cumulative, point.threshold) * 100).toFixed(1) : '—',
+        observation.observer,
+        observation.status,
+        observation.correctionHistory.at(-1)?.type ?? '',
+        observation.correctionReason,
+        observation.readingBeforeCorrection ?? '',
+        observation.readingAfterCorrection ?? '',
+        observation.correctedAt ? new Date(observation.correctedAt).toISOString() : ''
       ]
         .map(csvCell)
         .join(',')
@@ -97,7 +114,7 @@ export function exportObservationCsv(
 
 /** 预警与闭环台账 CSV */
 export function exportAlarmCsv(dams: Dam[], points: Point[], alarms: Alarm[]): string {
-  const header = ['坝体', '测点编号', '测点类型', '级别', '触发值', '触发日期', '状态', '处置人', '处置措施']
+  const header = ['坝体', '测点编号', '测点类型', '级别', '触发值', '触发日期', '状态', '处置人', '处置措施', '同步说明']
   const lines: string[] = [header.map(csvCell).join(',')]
   alarms.forEach((alarm) => {
     const point = points.find((item) => item.id === alarm.pointId)
@@ -112,7 +129,8 @@ export function exportAlarmCsv(dams: Dam[], points: Point[], alarms: Alarm[]): s
         alarm.triggerDate,
         alarm.state,
         alarm.handler || '—',
-        alarm.measure || '—'
+        alarm.measure || '—',
+        alarm.syncReason || '—'
       ]
         .map(csvCell)
         .join(',')
