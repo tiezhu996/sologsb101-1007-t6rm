@@ -19,6 +19,7 @@ import {
 } from 'antd'
 import type { TableColumnsType } from 'antd'
 import AlarmTag from '@/components/common/AlarmTag'
+import CorrectionInfo from '@/components/common/CorrectionInfo'
 import EmptyPanel from '@/components/common/EmptyPanel'
 import FilterBar, { type FilterModel } from '@/components/common/FilterBar'
 import StatBadge from '@/components/common/StatBadge'
@@ -27,7 +28,7 @@ import { usePointStore } from '@/stores/pointStore'
 import { useAlarmStore } from '@/stores/alarmStore'
 import { useAlarmLevel } from '@/hooks/useAlarmLevel'
 import { useIdbTable } from '@/hooks/useIdbTable'
-import { db, type ObservationRow } from '@/utils/db'
+import { db, recalculateObservations, type ObservationRow } from '@/utils/db'
 import { POINT_TYPES, type Point, type PointType } from '@/types/point'
 import { formatRate, formatReading, ratioOf } from '@/utils/threshold'
 
@@ -90,8 +91,9 @@ export default function TrendBoard() {
         return true
       })
       .map((point) => {
+        // 作废记录不参与最新值与速率排行，仅在抽屉明细中留痕
         const own = observationTable.rows
-          .filter((row) => row.pointId === point.id)
+          .filter((row) => row.pointId === point.id && !row.voided)
           .sort((a, b) => a.date.localeCompare(b.date))
         const latest = own[own.length - 1] ?? null
         const section = damStore.sections.find((item) => item.id === point.sectionId)
@@ -127,7 +129,7 @@ export default function TrendBoard() {
         .sort((a, b) => b.date.localeCompare(a.date)),
     [observationTable.rows, drawerPointId]
   )
-  const drawerLatest = drawerObservations[0] ?? null
+  const drawerLatest = drawerObservations.find((row) => !row.voided) ?? null
   const drawerLevel = drawerPoint && drawerLatest ? alarmLevel.evaluate(drawerPoint, drawerLatest.reading).level : null
 
   const generateAlarm = async (point: Point, observation: ObservationRow): Promise<void> => {
@@ -158,6 +160,8 @@ export default function TrendBoard() {
       initialValue: values.initialValue,
       threshold: values.threshold
     })
+    // 初值变更后累计变化量口径改变，该测点全部观测需按日期重算
+    await recalculateObservations(editingPoint.id)
     message.success(`${editingPoint.code} 初值与阈值已更新，历史观测偏差已重算`)
     setThresholdOpen(false)
   }
@@ -350,7 +354,12 @@ export default function TrendBoard() {
                   { title: '读数', dataIndex: 'reading', width: 110, render: (value: number) => value.toFixed(3) },
                   { title: '累计变化', dataIndex: 'cumulative', width: 120, render: (value: number) => value.toFixed(3) },
                   { title: '日速率', dataIndex: 'dailyRate', width: 110, render: (value: number) => value.toFixed(4) },
-                  { title: '观测人', dataIndex: 'observer', width: 100 }
+                  { title: '观测人', dataIndex: 'observer', width: 100 },
+                  {
+                    title: '修正留痕',
+                    width: 190,
+                    render: (_value: unknown, record: ObservationRow) => <CorrectionInfo observation={record} />
+                  }
                 ]}
               />
             )}

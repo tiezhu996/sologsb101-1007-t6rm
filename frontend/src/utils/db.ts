@@ -8,12 +8,13 @@ import type { Dam } from '@/types/dam'
 import type { Section } from '@/types/section'
 import type { Point } from '@/types/point'
 import type { Observation } from '@/types/observation'
+import type { CorrectionResult } from '@/types/observation'
 import type { Alarm } from '@/types/alarm'
 import type { Pool } from '@/types/pool'
-import { cumulativeOf, dailyRateOf, daysBetween } from '@/utils/threshold'
+import { alarmLevelOf, cumulativeOf, dailyRateOf, daysBetween } from '@/utils/threshold'
 
 export const DB_NAME = 'gbtaildam'
-export const DB_VERSION = 2
+export const DB_VERSION = 3
 
 export const LS_KEYS = {
   dbVersion: 'gbtaildam:db-version',
@@ -74,7 +75,7 @@ class TailDamDatabase extends Dexie {
     })
 
     // v2：测点/预警补 damId 冗余列（按坝体筛选免联表）；全部表补 revision 行修订号
-    this.version(DB_VERSION)
+    this.version(2)
       .stores({
         dams: 'id, name, damType, grade, updatedAt',
         sections: 'id, damId, stakeNo, updatedAt',
@@ -123,6 +124,19 @@ class TailDamDatabase extends Dexie {
             if (typeof alarm.measure !== 'string') alarm.measure = ''
           })
       })
+
+    // v3：观测表补修正留痕字段（作废标记、修正原因、修正前读数、修正时间），无索引变更
+    this.version(DB_VERSION).upgrade(async (tx) => {
+      await tx
+        .table('observations')
+        .toCollection()
+        .modify((row: Record<string, unknown>) => {
+          if (typeof row.voided !== 'boolean') row.voided = false
+          if (typeof row.correctionReason !== 'string') row.correctionReason = ''
+          if (typeof row.previousReading !== 'number') row.previousReading = null
+          if (typeof row.correctedAt !== 'number') row.correctedAt = null
+        })
+    })
   }
 }
 
@@ -221,6 +235,10 @@ function buildSeedObservations(): ObservationRow[] {
       cumulative: cumulativeOf(reading, initialValue),
       dailyRate,
       observer,
+      voided: false,
+      correctionReason: '',
+      previousReading: null,
+      correctedAt: null,
       createdAt: stamp(-200 + index),
       updatedAt: stamp(-200 + index),
       revision: ROW_REVISION
@@ -336,10 +354,19 @@ export async function importSnapshot(payload: BackupPayload): Promise<void> {
       db.pools.clear()
     ])
     const rev = <T>(row: T): T & Revisioned => ({ ...row, revision: ROW_REVISION })
+    // 旧版本存档可能缺少修正留痕字段，导入时补默认值
+    const normalizeObservation = (row: Observation): ObservationRow => ({
+      ...row,
+      voided: row.voided ?? false,
+      correctionReason: row.correctionReason ?? '',
+      previousReading: row.previousReading ?? null,
+      correctedAt: row.correctedAt ?? null,
+      revision: ROW_REVISION
+    })
     await db.dams.bulkPut((payload.dams ?? []).map(rev))
     await db.sections.bulkPut((payload.sections ?? []).map(rev))
     await db.points.bulkPut((payload.points ?? []).map(rev))
-    await db.observations.bulkPut((payload.observations ?? []).map(rev))
+    await db.observations.bulkPut((payload.observations ?? []).map(normalizeObservation))
     await db.alarms.bulkPut((payload.alarms ?? []).map(rev))
     await db.pools.bulkPut((payload.pools ?? []).map(rev))
   })
@@ -363,45 +390,149 @@ export async function resetDatabase(): Promise<void> {
   await seedDatabase()
 }
 
-/** 观测录入：写入累计变化量与日速率 */
+/** 观测修正留痕字段的默认值 */
+const OBSERVATION_CORRECTION_DEFAULTS = {
+  voided: false,
+  correctionReason: '',
+  previousReading: null,
+  correctedAt: null
+} as const
+
+/** 观测录入：写入累计变化量与日速率，并按日期顺序重算该测点全部观测 */
 export async function putObservation(
-  row: Omit<Observation, 'cumulative' | 'dailyRate'> & { cumulative?: number; dailyRate?: number }
+  row: Omit<Observation, 'cumulative' | 'dailyRate' | 'voided' | 'correctionReason' | 'previousReading' | 'correctedAt'> &
+    Partial<Pick<Observation, 'cumulative' | 'dailyRate' | 'voided' | 'correctionReason' | 'previousReading' | 'correctedAt'>>
 ): Promise<ObservationRow> {
   const point = await db.points.get(row.pointId)
   const initialValue = point ? point.initialValue : 0
   const others = (await db.observations.where('pointId').equals(row.pointId).toArray())
-    .filter((item) => item.id !== row.id)
+    .filter((item) => item.id !== row.id && !item.voided)
     .sort((a, b) => a.date.localeCompare(b.date))
   const previous = others.filter((item) => item.date < row.date).pop() ?? null
   const cumulative = cumulativeOf(row.reading, initialValue)
   const dailyRate = previous ? dailyRateOf(row.reading, previous.reading, daysBetween(previous.date, row.date)) : 0
   const next: ObservationRow = {
+    ...OBSERVATION_CORRECTION_DEFAULTS,
     ...row,
     cumulative,
     dailyRate,
     revision: ROW_REVISION
   }
   await db.observations.put(next)
-  return next
+  // 新记录可能插在历史日期中间，后续记录的日速率都要跟着重算
+  await recalculateObservations(row.pointId)
+  return (await db.observations.get(row.id)) ?? next
 }
 
-/** 重算某测点全部观测的累计变化量与日速率 */
-export async function recalculateObservations(pointId: string): Promise<void> {
+/** 按日期顺序重算某测点全部有效（未作废）观测的累计变化量与日速率，返回重算条数 */
+export async function recalculateObservations(pointId: string): Promise<number> {
   const point = await db.points.get(pointId)
   const initialValue = point ? point.initialValue : 0
-  const rows = (await db.observations.where('pointId').equals(pointId).toArray()).sort((a, b) =>
-    a.date.localeCompare(b.date)
-  )
+  const rows = (await db.observations.where('pointId').equals(pointId).toArray())
+    .filter((row) => !row.voided)
+    .sort((a, b) => a.date.localeCompare(b.date))
+  const now = Date.now()
   const patches = rows.map((row, index) => {
     const previous = index === 0 ? null : rows[index - 1]
     return {
       ...row,
       cumulative: cumulativeOf(row.reading, initialValue),
       dailyRate: previous ? dailyRateOf(row.reading, previous.reading, daysBetween(previous.date, row.date)) : 0,
-      updatedAt: Date.now()
+      updatedAt: now
     }
   })
   if (patches.length > 0) await db.observations.bulkPut(patches)
+  return patches.length
+}
+
+/**
+ * 修正/作废后同步该测点的未闭环预警：
+ * 以修正后的最新有效观测为准更新级别与触发值；不再越限的撤销；已闭环预警保持原样。
+ */
+export async function syncOpenAlarmsForPoint(pointId: string): Promise<{ synced: number; revoked: number }> {
+  const point = await db.points.get(pointId)
+  if (!point) return { synced: 0, revoked: 0 }
+  const latest =
+    (await db.observations.where('pointId').equals(pointId).toArray())
+      .filter((row) => !row.voided)
+      .sort((a, b) => b.date.localeCompare(a.date))[0] ?? null
+  const level = latest ? alarmLevelOf(latest.cumulative, point.threshold) : null
+  const openAlarms = (await db.alarms.where('pointId').equals(pointId).toArray()).filter(
+    (alarm) => alarm.state !== '已闭环'
+  )
+  const now = Date.now()
+  let synced = 0
+  let revoked = 0
+  for (const alarm of openAlarms) {
+    if (latest === null || level === null) {
+      await db.alarms.delete(alarm.id)
+      revoked += 1
+    } else {
+      await db.alarms.update(alarm.id, {
+        level,
+        triggerValue: latest.cumulative,
+        triggerDate: latest.date,
+        updatedAt: now
+      })
+      synced += 1
+    }
+  }
+  return { synced, revoked }
+}
+
+export interface ObservationCorrectionPatch {
+  date: string
+  reading: number
+  observer: string
+  /** 修正原因（必填，留痕） */
+  correctionReason: string
+}
+
+/** 编辑观测：必须填写修正原因，保存后重算该测点全部观测并同步未闭环预警 */
+export async function correctObservation(id: string, patch: ObservationCorrectionPatch): Promise<CorrectionResult> {
+  const reason = patch.correctionReason.trim()
+  if (!reason) throw new Error('修正原因不能为空')
+  return db.transaction('rw', [db.observations, db.alarms, db.points], async () => {
+    const existing = await db.observations.get(id)
+    if (!existing) throw new Error('观测记录不存在或已被删除')
+    const now = Date.now()
+    await db.observations.put({
+      ...existing,
+      date: patch.date,
+      reading: patch.reading,
+      observer: patch.observer,
+      voided: false,
+      previousReading: existing.reading,
+      correctionReason: reason,
+      correctedAt: now,
+      updatedAt: now
+    })
+    const recalculated = await recalculateObservations(existing.pointId)
+    const sync = await syncOpenAlarmsForPoint(existing.pointId)
+    return { recalculated, alarmsSynced: sync.synced, alarmsRevoked: sync.revoked }
+  })
+}
+
+/** 作废观测：必须填写作废原因，记录保留留痕但退出计算，随后重算并同步未闭环预警 */
+export async function voidObservation(id: string, reason: string): Promise<CorrectionResult> {
+  const trimmed = reason.trim()
+  if (!trimmed) throw new Error('作废原因不能为空')
+  return db.transaction('rw', [db.observations, db.alarms, db.points], async () => {
+    const existing = await db.observations.get(id)
+    if (!existing) throw new Error('观测记录不存在或已被删除')
+    const now = Date.now()
+    await db.observations.put({
+      ...existing,
+      voided: true,
+      previousReading: existing.reading,
+      correctionReason: trimmed,
+      correctedAt: now,
+      updatedAt: now
+    })
+    const recalculated = await recalculateObservations(existing.pointId)
+    const sync = await syncOpenAlarmsForPoint(existing.pointId)
+    return { recalculated, alarmsSynced: sync.synced, alarmsRevoked: sync.revoked }
+  })
 }
 
 /* ============================ 本地 UI 偏好 ============================ */

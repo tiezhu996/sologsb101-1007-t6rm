@@ -69,18 +69,13 @@ export default function PointConfig() {
     })
   }
 
-  /** 各测点最新的累计变化量（用于越限统计） */
+  /** 各测点最新的累计变化量（用于越限统计；作废记录不参与） */
   const latestCumulative = useMemo(() => {
     const map: Record<string, number> = {}
     observationTable.rows.forEach((row) => {
-      const existing = map[row.pointId]
-      if (existing === undefined) {
-        map[row.pointId] = row.cumulative
-      }
-    })
-    observationTable.rows.forEach((row) => {
+      if (row.voided) return
       const latest = observationTable.rows
-        .filter((item) => item.pointId === row.pointId)
+        .filter((item) => item.pointId === row.pointId && !item.voided)
         .sort((a, b) => b.date.localeCompare(a.date))[0]
       if (latest) map[row.pointId] = latest.cumulative
     })

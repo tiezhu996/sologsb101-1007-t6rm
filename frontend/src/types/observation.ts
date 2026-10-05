@@ -11,6 +11,14 @@ export interface Observation {
   /** 日速率（与上一次观测的差值 ÷ 间隔天数） */
   dailyRate: number
   observer: string
+  /** 作废标记：作废记录退出累计/速率/判定计算，仅留痕 */
+  voided: boolean
+  /** 修正原因（编辑或作废时必填） */
+  correctionReason: string
+  /** 修正前读数（最近一次修正/作废前的原读数；未修正过为 null） */
+  previousReading: number | null
+  /** 最近一次修正/作废时间戳；未修正过为 null */
+  correctedAt: number | null
   createdAt: number
   updatedAt: number
 }
@@ -20,6 +28,8 @@ export interface ObservationDraft {
   date: string
   reading: number
   observer: string
+  /** 修正原因：仅编辑已有记录时必填 */
+  correctionReason?: string
 }
 
 export const EMPTY_OBSERVATION_DRAFT: ObservationDraft = {
@@ -44,4 +54,14 @@ export interface ObservationBatchRow {
   date: string
   reading: number
   observer: string
+}
+
+/** 编辑/作废观测后的重算与预警同步结果 */
+export interface CorrectionResult {
+  /** 按日期顺序重算的观测条数 */
+  recalculated: number
+  /** 以最新观测为准同步了级别与触发值的未闭环预警数 */
+  alarmsSynced: number
+  /** 修正后不再越限而被撤销的未闭环预警数 */
+  alarmsRevoked: number
 }

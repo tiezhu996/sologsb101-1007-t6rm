@@ -39,6 +39,13 @@ export function csvCell(value: string | number): string {
   return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
 }
 
+/** 修正时间戳 → YYYY-MM-DD HH:mm（本地时区） */
+function formatDateTime(ts: number): string {
+  const date = new Date(ts)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
 /** 观测台账 CSV */
 export function exportObservationCsv(
   dams: Dam[],
@@ -61,7 +68,11 @@ export function exportObservationCsv(
     '累计变化',
     '日速率',
     '占阈值比(%)',
-    '观测人'
+    '观测人',
+    '状态',
+    '修正前读数',
+    '修正原因',
+    '修正时间'
   ]
   const lines: string[] = [header.map(csvCell).join(',')]
   observations.forEach((observation) => {
@@ -84,7 +95,11 @@ export function exportObservationCsv(
         observation.cumulative,
         observation.dailyRate,
         point ? (ratioOf(observation.cumulative, point.threshold) * 100).toFixed(1) : '—',
-        observation.observer
+        observation.observer,
+        observation.voided ? '作废' : observation.correctedAt !== null ? '已修正' : '正常',
+        observation.previousReading ?? '—',
+        observation.correctionReason || '—',
+        observation.correctedAt !== null ? formatDateTime(observation.correctedAt) : '—'
       ]
         .map(csvCell)
         .join(',')
